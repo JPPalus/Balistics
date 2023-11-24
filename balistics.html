@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Balistics</title>
+<meta name="description" content="Cursus volantis missile cogitatorum" /> 
+</head>
+
+<div id="charts_box">
+    <canvas id="balistic_chart"></canvas>
+</div>
+
+<div id="infos_box">
+    <p id= "debug">
+        test
+    </p>
+</div>
+
+<script src="./.Resources/chart.js"></script>
+
+<script>
+    //-------------- Lois de la physique --------------
+    // précision de calcul 
+    var _precision = 0.10;
+    // gravitation
+    var _g = 9.81;
+    // température en °C
+    var _ϑ = 20;
+    // pression atmosphérique en Pa
+    // TODO https://fr.wikipedia.org/wiki/Variation_de_la_pression_atmosph%C3%A9rique_avec_l%27altitude
+    var _p = 101325;
+    // ratio d'humidité relative
+    var _φ = 0;
+    // masse volumique de l'air en kg.m^-3
+    var _ρair = ρair();
+    // viscosité dynamique de l'air en Pa.s^-1
+    var _ηair = ηair();
+    // viscosité cinématique de l'air en m².s^-1
+    var _𝜈air = 𝜈(_ηair, _ρair);
+    // coordonnées du centre de gravité au départ 
+    var _x0 = 0;
+    var _y0 = 30;
+    var _z0 = 0;
+    //--------- Conditions initiales du tireur ---------
+    // vitesse initiale en m.s^-1
+    var _V0 = 100;
+    // angle initial en radians
+    var _θ0 = 0.523;
+    // coordonnées initiales du vecteur vitesse
+    var _V0x = 0;
+    var _V0y = _V0 * Math.sin(_θ0);
+    var _V0z = _V0 * Math.cos(_θ0);
+    //-------- Conditions initiales de la cible --------
+    // coordonnées de la cible T
+    var _Tx = 130;
+    var _Ty = 50;
+    var _Tz = 0;
+    // taille de la cible en m
+    var _TSize = 2;
+    // plus cours chemin vers la cible 
+    // Rf page O
+    var _RT = RT();
+    // élévation de la cible par rapport au tireur en radians
+    var _θT = θT();
+    //------- Conditions initiales de la flèche -------
+    //------- tube -------
+    // diamètre du tube en m
+    var _dtube = 0.006;
+    // longueur du tube en m
+    var _ltube = 0.7;
+    // surface du tube en m²
+    var _Stube = Stube(_ltube, _dtube);
+    // nombre de Reynolds du tube
+    var _Retube = Re(_V0, _ltube, _𝜈air);
+    // section du tube en m²
+    var _stube = section(_dtube);
+    // profondeur moyenne des rugosité du tube en m
+    var _Ratube = 0.00002;
+    // coefficient balistique du tube
+    var _Cxtube = Cxtube(_V0);
+    // traînée du tube
+    var _Dtube = Dtube(_V0);
+    //------- pointe -------
+    // diamètre maximum de la pointe en m
+    var _dpointe = _dtube;
+    // section de la pointe en m²
+    var _spointe = _stube;
+    // coefficient balistique de la pointe
+    const _Cxpointe = {'bullet': 0.0838918877244576, 'conical': 0.08013553454276547, 'combo': 0.08661708513078327};
+    var _point_type = "bullet";
+    // traînée de la pointe
+    var _Dpointe = Dpointe(_V0);
+    //------ empenage ------
+    // longueur des plumes en m
+    var _lfletching = 0.30;
+    // épaisseur des plumes en m
+    var _efletching = 0.0035;
+    // profondeur moyenne des rugosité des plumes en m
+    var _Rafletching = 0.00001
+    // nombre de plumes
+    var _nbfletching = 3;
+    // surface d'une plume en m²
+    var _Afletching = 0.00028;
+    // section de l'empenage en m²
+    var _sfletching = 0.0000035;
+    // coefficient de friction de l'empenage
+    var _Cffletching = Cffletching(_V0);
+    // coefficient balistique de l'empenage
+    var _Cxfletching = Cxfletching(_V0);
+    // traînée de l'empenage
+    var _Dfletching = Dfletching(_V0);
+    //------- encoche -------
+    // diamètre de l'encoche en m
+    var _dencoche = 0.006;
+    // coefficient balistique de l'encoche
+    var _Cxencoche = Cxencoche(_V0);
+    // traînée de l'encoche
+    var _Dencoche = Dencoche(_V0);
+    //-------- flèche --------
+    // masse de la flèche en kg
+    var _mflèche = 0.050;
+
+
+
+    // traînée de la flèche
+    // Dflèche = Dpoint + Dshaft + Dfletching + Dnotch;
+    // figure 3 page III
+    
+
+
+
+    // équations de mouvement 
+    // figure 16 page I
+    function position(t) {
+        let xt = _V0 * Math.cos(θ0) * t;
+        let yt = y0 + (_V0 * Math.sin((θ0) * t)) - (0.5 * _g * t * t);
+        let zt = 0;
+        return [xt, yt, zt];
+    }
+
+    // trajectoire
+    // figure 18 page I
+    function trajectoire(x) {
+        let y = _y0 + (Math.tan(_θ0) * x) - ((_g / (_V0 * _V0 * Math.cos(_θ0) * Math.cos(_θ0)) * 0.5 * x * x));
+        return y;
+    }
+
+    // portée en m
+    // figure 23 page I
+    function portée() {
+        let xmax = _xyValues[_xyValues.length - 1]['x'];
+        return xmax;
+    }
+
+    // flèche, ou altitude en m
+    function altitude() {
+        let ymax = _y0;
+        for(var i = 0 ; i < _xyValues.length; i++) {
+            if(_xyValues[i]['y'] > ymax) {
+                ymax = _xyValues[i]['y'];
+            }
+        }
+        return ymax;
+    }
+
+    // vitesse minimale nécessaire pour atteindre la cible
+    // figure 6 page II
+    function vmin() {
+        let v =  Math.sqrt(_g * RT());
+        return v;
+    }
+
+    // plus cours chemin vers la cible
+    function RT() {
+        return Math.sqrt((_Tx * _Tx) + (_Ty * _Ty));
+    }
+
+    // élévation de la cible par rapport au tireur en radians
+    function θT() {
+        return Math.atan(_Tx / (_Ty - _y0));
+    }
+
+    // masse volumique de l'air
+    // https://fr.wikipedia.org/wiki/Masse_volumique_de_l%27air
+    function ρair() {
+        return (1 / (287.06 * (_ϑ + 273.15))) * (_p - (230.617 * _φ * Math.exp((17.5043 * _ϑ) / (241.2 + _ϑ))));
+    }
+
+    // viscosité dynamique de l'air en Pa.s^-1
+    // https://en.wikipedia.org/wiki/Viscosity
+    function ηair(){
+        return 2.791 * Math.pow(10, -7) * Math.pow((_ϑ + 273.15), 0.7355);
+    }
+
+    // viscosité cinématique en m².s^-1
+    function 𝜈(η, ρ) {
+        return _ηair / _ρair;
+    }
+
+    // coefficient balistique
+    // https://en.wikipedia.org/wiki/Drag_coefficient
+    // Fd = drag force N, u = flow speed m.s^-1, d = diameter m, ρ = masse volumique du fluide
+    function Cx(Fd, u, d, ρ) {
+        return (2 * Fd) / (ρ * u * u * section(d));
+    }
+
+    // rugosité relative
+    // http://arcacademie.nursit.com/spip.php?article122#nh5 figure 6
+    function Rr(Ra, L) {
+        return Ra / L;
+    }
+
+    // coefficient de friction rugueux d'un tube
+    // http://arcacademie.nursit.com/spip.php?article122#nh5 figure 6
+    function Cftube() {
+        return 0.032 * Math.pow(Rr(_Ratube, _ltube), 0.2);
+    }
+
+    // coefficient balistique d'un tube
+    function Cxtube(V) {
+        let Cxlead = 0;
+        if(_Ratube <= 0.00001 || _Retube <= 450000) {
+            Cxlead = (0.031 / Math.pow(Re(V, _ltube, _ρair), 1/7)) * (_Stube / _stube);
+        } else {
+            Cxlead = Cftube() * (_Stube / _stube);
+        }
+        // voir notch dans https://sci-hub.st/https://doi.org/10.1177/1754337111407124
+        let Cxtrail = 0.029 / Math.sqrt(Cxlead);
+        return Cxlead + Cxtrail;
+    }
+
+    // coefficient balistique de l'encoche
+    // https://sci-hub.st/https://doi.org/10.1177/1754337111407124
+    function Cxencoche(V) {
+        return 0.3;
+    }
+
+    // traînée de l'encoche
+    // https://sci-hub.st/https://doi.org/10.1177/1754337111407124
+    function Dencoche(V) {
+        return 0.5 * _ρair * V * V * Cxencoche(V) * Math.PI * Math.pow(_dencoche / 2, 2);
+    }
+
+    // traînée de la pointe
+    //https://sci-hub.st/https://doi.org/10.1177/1754337111407124 figure 1
+    function Dpointe(V) {
+        return 0.5 * _ρair * V * V * _Cxpointe[_point_type] * Math.PI * (_dpointe / 2) * (_dpointe / 2);
+    }
+
+    // traînée du tube
+    // https://sci-hub.st/https://doi.org/10.1177/1754337111407124 figure 3
+    // https://en.wikipedia.org/wiki/Drag_coefficient
+    function Dtube(V) {
+        // let integral = 1;
+        // let Rex = Re(V, 0.01, 𝜈air);
+        // let ΔRex = 0.0016 * Ltube / (dtube * Math.pow(Retube, 0.4));
+        // for(let i = 0.01; i < Ltube ; i+= 0.01) {
+        //     integral += (0.646 / Math.pow(Rex, 0.5)) * dtube * i * i * 0.5;
+        // }
+        // return 0.5 * ρair * V * V * Math.PI * integral;
+        // return 0.5 * _ρair * V * V * Math.PI * 0.646 / Math.pow(_Retube, 0.5);
+        return 0.5 * _ρair * V * V * Cxtube(V) * _stube;
+    }
+
+    // coefficient de friction d'une plume de l'empenage
+    // http://arcacademie.nursit.com/spip.php?article122#nh5 figure 7
+    function Cffletching(V) {
+        return (1 / Math.pow((1.503 * Math.log(Re(V, _lfletching, _𝜈air)) - 5.6), 2));
+    }
+
+    // coefficient balistique de l'empenage
+    // http://arcacademie.nursit.com/spip.php?article122#nh5 figure 7
+    function Cxfletching(V) {
+        let Cxlead = 0;
+        if(_Rafletching<= 0.000007) {
+            Cxlead = (0.031 / Math.pow(Re(V, _lfletching, _ρair), 1/7)) * (_sfletching / _stube);
+        } else {
+            Cxlead = 2 * _nbfletching * Cffletching(V) * _Afletching / _stube;
+        }
+        let Cxtrail = _nbfletching * (0.135 / Math.pow(2 * Cffletching(V) * _lfletching / _efletching, 1/3)) * _sfletching / _stube;
+        return Cxtrail + Cxlead;
+    }
+
+    // traînée de l'empenage
+    // https://sci-hub.st/https://doi.org/10.1177/1754337111407124 figure 4
+    // https://en.wikipedia.org/wiki/Drag_coefficient#Notes
+    function Dfletching(V) { 
+        return 0.5 * _ρair;
+    }
+
+    // coefficient de portance d'une plume
+    // https://sci-hub.st/https://doi.org/10.1177/1754337111407124 figure 10
+    // function Clfletching(V) {
+    //     return 1.25 * Math.sin(2 * )
+    // }
+
+    // portance de l'empenage
+    // https://sci-hub.st/https://doi.org/10.1177/1754337111407124 figure 9
+    // function Lfletching(V) {
+    //     return _nbfletching * 0.5 * _ρair * V * V * 
+    // }
+
+    // nombre de Reynolds
+    // https://en.wikipedia.org/wiki/Reynolds_number
+    function Re(v, L, 𝜈) {
+        return v * L / 𝜈;
+    }
+
+    // section d'une flèche 
+    function section(d) {
+        return Math.PI / 4 * d * d;
+    }
+
+    // surface du tube en m²
+    function Stube(L, d) {
+        return Math.PI * L * d;
+    }
+
+    // angle d'incidence 
+    function α(Vx, Vy) {
+        return Math.atan2(Vy, Vx);
+    }
+
+    function radians_to_degrees(r) {
+        return r * 180 / Math.PI;
+    }
+
+    function round_to_precision(n) {
+        return Math.round(n * (1/_precision)) / (1/_precision);
+    }
+
+    function meters_to_feet(n) {
+        return round_to_precision(n * 3.28084);
+    }
+
+    function feet_to_meters(n) {
+        return round_to_precision(n / 3.28084);
+    }
+
+    // TODO
+    // vitesse terminale
+    // temps de vol
+    // sol non plat
+    // altitude
+
+    var _labels = [];
+    var _xyValues = [];
+    var _zValues = [];
+    var _TValues = [];
+    var _ground = [];
+    var _αValues = [];
+    generateData();
+    debug();
+    
+    new Chart("balistic_chart", {
+        type: "scatter",
+        data: {
+            labels: _labels,
+            datasets: [
+                {
+                    label: "arrow",
+                    fill: false,
+                    showLine: true,
+                    tension: 0.15,
+                    pointRadius: 0,
+                    borderColor: "rgba(0, 0, 255, 0.5)",
+                    backgroundColor: "rgba(0, 0, 255, 0.5)",
+                    data: _xyValues
+                },
+                {
+                    label: "target",
+                    fill: false,
+                    showLine: true,
+                    tension: 0.15,
+                    pointRadius: 0,
+                    borderColor: "rgba(128, 0, 0, 1)",
+                    backgroundColor: "rgba(128, 0, 0, 1)", 
+                    data: _TValues
+                },
+                {
+                    label: "ground",
+                    fill: false,
+                    showLine: true,
+                    tension: 0.15,
+                    pointRadius: 0,
+                    borderColor: "rgba(0, 0, 0, 1)",
+                    backgroundColor: "rgba(0, 0, 0, 1)", 
+                    data: _ground
+                }
+            ]
+        },    
+        options: {
+            legend: {display: false},
+            title: {
+                display: true,
+                text: "test",
+                fontSize: 16
+            },
+            scales: {
+                y: {
+                    title: {
+                        display: true,
+                        text: 'm'
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: 'm'
+                    },
+                    ticks: {
+                        maxTicksLimit: 20
+                    }
+                }     
+            }
+        }
+    });
+
+    function generateData() {
+        let y = 0;
+        // sol
+        let xG = 0;
+        let yG = 0;
+        for(let x = 0 ; y >= yG ; x += _precision) {
+            // trajectoire
+            y = trajectoire(x);
+            if(y >= yG) {
+                _labels.push(String(x));
+                _xyValues.push({'x': String(x), 'y': y});
+                _ground.push(yG);
+            } else {
+                _labels.push(x);
+                _xyValues.push({'x': String(x), 'y': yG});
+                _ground.push(yG);
+            }
+            // TODO
+            _αValues.push(α(x, y));
+        }
+        // cible
+        _TValues.push({'x': String(_Tx), 'y': _Ty});
+        _TValues.push({'x': String(_Tx), 'y': _Ty + _TSize/2});
+        _TValues.push({'x': String(_Tx), 'y': _Ty - _TSize/2});
+        _labels.push(String(_Tx));
+    }
+
+    function debug() {
+        var debug_window = document.getElementById("debug");
+        debug_window.innerHTML = "Portée : " + round_to_precision(portée()) + " m" +
+                                '<p\>' + 
+                                "Altitude max : " + round_to_precision(altitude()) + " m" +
+                                '<p\>' + 
+                                "Angle tireur-cible : " + round_to_precision(radians_to_degrees(_θT)) + "°" +
+                                '<p\>' + 
+                                "Section du tube : " + _stube + " m²" +
+                                '<p\>' + 
+                                "vmin : " + round_to_precision(vmin()) + " m.s^1" +  
+                                '<p\>' + 
+                                "vmin : " + meters_to_feet(vmin()) + " fps" + 
+                                '<p\>' +
+                                "Masse volumique de l'air : " + round_to_precision(_ρair) + " kg.m^-3" + 
+                                '<p\>' + 
+                                "Viscosité cinématique de l'air à 20°C : " + _𝜈air + ' m².s^-1' + 
+                                '<p\>' + 
+                                "Coefficient de friction de l'empenage : " + _Cffletching +
+                                '<p\>' + 
+                                "Coefficient de friction du tube : " + Cftube() +
+                                '<p\>' + 
+                                "Coefficient balistique du tube : " + _Cxtube +
+                                '<p\>' + 
+                                "Coefficient balistique de l'empenage : " + _Cxfletching +
+                                '<p\>' + 
+                                "Coefficient balistique de la pointe : " + _Cxpointe[_point_type] +
+                                '<p\>' + 
+                                "Coefficient balistique de l'encoche' : " + _Cxencoche +
+                                '<p\>' + 
+                                "Traînée de la pointe : " + _Dpointe + ' N' +
+                                '<p\>' + 
+                                "Traînée du tube : " + _Dtube + ' N' + 
+                                '<p\>' + 
+                                "Traînée de l'encoche : " + _Dencoche + ' N' +
+                                '<p\>' + 
+                                "Traînée de l'empenage : " + _Dfletching + ' N';
+    }
+
+    </script>
+
+<p> Cursus volantis missile cogitatorum </p>
+
+<p> </p>
+
+</body>
+</html> 
